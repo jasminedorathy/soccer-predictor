@@ -14,30 +14,31 @@ class MatchPredictor:
         self.model = None
         self.scaler = StandardScaler()
         self.team_encoder = LabelEncoder()
+        self.label_encoder = LabelEncoder()
         self.is_trained = False
         
     def prepare_features(self, df):
         """Prepare features for model training"""
         # Create copy to avoid modifying original data
         data = df.copy()
-        
+
         # Encode team names
         all_teams = pd.concat([data['home_team'], data['away_team']]).unique()
         self.team_encoder.fit(all_teams)
-        
+
         data['home_team_encoded'] = self.team_encoder.transform(data['home_team'])
         data['away_team_encoded'] = self.team_encoder.transform(data['away_team'])
-        
+
         # Feature engineering
         data['total_shots'] = data['home_shots'] + data['away_shots']
         data['shot_ratio_home'] = data['home_shots'] / (data['total_shots'] + 1e-5)
         data['possession_ratio_home'] = data['home_possession'] / (data['home_possession'] + data['away_possession'] + 1e-5)
         data['pass_accuracy_diff'] = data['home_pass_accuracy'] - data['away_pass_accuracy']
-        
+
         # Select features for model
         feature_columns = [
             'home_team_encoded', 'away_team_encoded',
-            'home_shots', 'away_shots', 
+            'home_shots', 'away_shots',
             'home_shots_on_target', 'away_shots_on_target',
             'home_possession', 'away_possession',
             'home_pass_accuracy', 'away_pass_accuracy',
@@ -45,11 +46,15 @@ class MatchPredictor:
             'home_corners', 'away_corners',
             'shot_ratio_home', 'possession_ratio_home', 'pass_accuracy_diff'
         ]
-        
+
         X = data[feature_columns]
         y = data['outcome']
-        
-        return X, y, feature_columns
+
+        # Encode labels to integers
+        self.label_encoder.fit(y)
+        y_encoded = self.label_encoder.transform(y)
+
+        return X, y_encoded, feature_columns
     
     def train(self, df, model_type='random_forest'):
         """Train the prediction model"""
@@ -100,19 +105,22 @@ class MatchPredictor:
         """Predict outcome for a specific match"""
         if not self.is_trained:
             raise Exception("Model must be trained first")
-        
+
         # Prepare features for prediction
         features = self.create_prediction_features(
             home_team, away_team, home_stats, away_stats
         )
-        
+
         # Scale features
         features_scaled = self.scaler.transform([features])
-        
+
         # Make prediction
-        prediction = self.model.predict(features_scaled)[0]
+        prediction_encoded = self.model.predict(features_scaled)[0]
         probabilities = self.model.predict_proba(features_scaled)[0]
-        
+
+        # Decode prediction back to string
+        prediction = self.label_encoder.inverse_transform([prediction_encoded])[0]
+
         return prediction, probabilities
     
     def create_prediction_features(self, home_team, away_team, home_stats, away_stats):
@@ -147,16 +155,18 @@ class MatchPredictor:
                 'model': self.model,
                 'scaler': self.scaler,
                 'team_encoder': self.team_encoder,
+                'label_encoder': self.label_encoder,
                 'feature_columns': self.feature_columns
             }, filepath)
             print(f"Model saved to {filepath}")
-    
+
     def load_model(self, filepath):
         """Load trained model"""
         loaded = joblib.load(filepath)
         self.model = loaded['model']
         self.scaler = loaded['scaler']
         self.team_encoder = loaded['team_encoder']
+        self.label_encoder = loaded['label_encoder']
         self.feature_columns = loaded['feature_columns']
         self.is_trained = True
         print(f"Model loaded from {filepath}")
